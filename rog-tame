@@ -1,0 +1,83 @@
+#!/bin/sh
+
+set -eu
+
+log(){
+	if "$DEBUG"; then
+		echo -e "\e[32m[*]\e[39m $*"
+	fi
+}
+
+service_is_up(){
+	log "Checking if service $1 is up..."
+	"$CMD" /c sc query "$1" | grep RUNNING
+}
+
+gpu_is_up(){
+	log "Checking if GPU is up..."
+	"$POWERSHELL" -command "Get-PnPDevice -FriendlyName 'NVIDIA GeForce RTX 3050 Ti Laptop GPU' | Enable-PnPDevice -Confirm:\$false" | grep OK
+}
+
+load_plan(){
+	log "Loading $plan_file..."
+	. "$plan_file"
+
+	log "Setting power plan..."
+	"$POWERCFG" -setactive "$POWER_PLAN"
+	"$POWERCFG" /setdcvalueindex scheme_current c763b4ec-0e50-4b6b-9bed-2b92a6ee884e 7ec1751b-60ed-4588-afb5-9819d3d77d90 "$AMD_SLIDER"
+	"$POWERCFG" /setacvalueindex scheme_current c763b4ec-0e50-4b6b-9bed-2b92a6ee884e 7ec1751b-60ed-4588-afb5-9819d3d77d90 "$AMD_SLIDER"
+
+	log "Setting atrofac plan..."
+	"$ATROFAC" plan "$ATROFAC_PLAN"
+
+	log "Setting powermode plan..."
+	"$POWERMODE" "$POWER_MODE_PLAN"
+
+	## Takes the same amount of time to check if its up than just disabling it
+	"$POWERSHELL" -command "Get-PnPDevice -FriendlyName 'NVIDIA GeForce RTX 3050 Ti Laptop GPU' | Enable-PnPDevice -Confirm:\$false"
+
+	if ! "$GPU_ENABLE"; then
+		log "Disabling GPU..."
+		"$POWERSHELL" -command "Get-PnPDevice -FriendlyName 'NVIDIA GeForce RTX 3050 Ti Laptop GPU' | Disable-PnPDevice -Confirm:\$false"
+	fi
+
+	log "Setting ryzenadj args..."
+	"$RYZENADJ" $RYZENADJ_ARGS
+
+	for service in $SERVICES; do
+		if service_is_up "$service"; then
+			log "Service $service is up, stopping..."
+			set -x
+			"$CMD" /c sc stop "$service"
+			"$CMD" /c sc config "$service" start=manual
+			set +x
+		else
+			log "Service $service was already down."
+		fi
+	done
+}
+
+HERE="$0"
+HERE="$(dirname "$HERE")"
+cd "$HERE"
+HERE="$PWD"
+
+. "$HERE/rog-tame.conf"
+
+case "$#" in
+	0)
+		echo "usage: $0 [PLAN]"
+		exit 1
+		;;
+esac
+
+plan="$1"
+plan_file="$HERE/plans/$plan.conf"
+
+if [ -f "$plan_file" ]; then
+	load_plan "$plan_file"
+	log "All done!"
+else
+	echo "Plan $plan does not exist in $plan_file" >&2
+	exit 1
+fi
